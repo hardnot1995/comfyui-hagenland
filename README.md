@@ -11,4 +11,4 @@ This custom ComfyUI node acts as a controller in a video generation workflow. It
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/comfyui_video_sequence_controller.git
+   git clone https://github.com/hardnot1995/comfyui-hagenland.git
