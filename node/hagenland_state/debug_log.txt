@@ -1,0 +1,8 @@
+1744474424.5089355: Trigger executed with display_name=Test Sequence, reset=False
+1744474424.5089355: Generated unique_id: Test Sequence_8a12e249
+1744474424.5089355: Starting process with unique_id: Test Sequence_8a12e249, reset: False
+1744474424.509936: Created project folder: output\TestProject_1744474424
+1744474424.509936: Saved state: {'current_step': 1, 'work_folder': 'output\\TestProject_1744474424', 'last_execution_time': 1744474424.509936, 'total_segments': 5, 'starter_provided': True}
+1744474424.5109353: Initialized new state for Test Sequence_8a12e249, starting at step 1
+1744474424.5109353: Processing step 1/5
+1744474424.5109353: Returning from process function
