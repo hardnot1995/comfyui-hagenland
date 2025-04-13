@@ -1,0 +1,35 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# Distribution / Build artifacts
+build/
+dist/
+*.egg-info/
+
+# IDE / Editor specific
+.vscode/
+.idea/
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Environment variables
+*.env
+
+# Project specific outputs & state
+hagenland_state/
+videosegments/
+output/

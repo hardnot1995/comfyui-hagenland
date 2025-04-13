@@ -6,6 +6,8 @@ import json
 import traceback # Re-add traceback for exception handling
 from typing import Any, Dict, List
 import numpy as np # Keep numpy as it is used elsewhere
+import logging
+import folder_paths # Needed for Lora list
 
 # Get the absolute path to the ComfyUI root directory
 # First, get the directory of the current file
@@ -20,6 +22,8 @@ STATE_DIR = os.path.join(ROOT_DIR, "hagenland_state")
 
 # Create the state directory if it doesn't exist
 os.makedirs(STATE_DIR, exist_ok=True)
+
+logger = logging.getLogger(__name__)
 
 class VideoSequenceTriggerNode:
     """Forces execution of the video sequence workflow in proper order"""
@@ -305,11 +309,15 @@ class VideoSequenceControllerNode:
             # === Case 2: Auto-Restart After Finishing ===
             elif state.get('is_finished', False) and not reset_flag:
                 print(f"[Controller] Workflow previously finished for {unique_id}. Auto-restarting sequence...")
-                # Re-initialize state using the SAME unique_id but NEW starter_image
-                work_folder = state.get('work_folder') # Reuse existing folder
+                # --- START FIX: Reuse existing folder on auto-restart ---
+                # Attempt to reuse existing work folder
+                work_folder = state.get('work_folder')
                 if not work_folder or not os.path.exists(work_folder):
-                    print("[Controller] Warning: Previous work_folder not found, re-initializing.")
+                    print("[Controller] Warning: Previous work_folder not found or invalid in state. Re-initializing.")
                     work_folder = self.initialize_project_folder(project_name, work_location_path)
+                else:
+                    print(f"[Controller] Reusing existing work folder: {work_folder}")
+                # --- END FIX ---
                 image_folder = os.path.join(work_folder, 'images')
                 video_folder = os.path.join(work_folder, 'videos')
                 os.makedirs(image_folder, exist_ok=True) # Ensure they exist
@@ -363,10 +371,12 @@ class VideoSequenceControllerNode:
                             loaded_feedback_image = self.load_image_tensor(feedback_image_path)
                             if loaded_feedback_image is not None:
                                 output_image = loaded_feedback_image # This becomes the output for the *next* step
-                                # Save this as the official frame for the *completed* step
-                                self.save_image_tensor(output_image, os.path.join(state['work_folder_image'], f"frame_{current_step:06d}.png"))
+                                # Save with correct frame number BEFORE incrementing step
+                                frame_save_path = os.path.join(state['work_folder_image'], f"frame_{current_step:06d}.png")
+                                print(f"[Controller] Saving feedback result as official frame: {frame_save_path}")
+                                self.save_image_tensor(output_image, frame_save_path)
                                 try:
-                                    os.remove(feedback_image_path)
+                                    os.remove(feedback_image_path) # Clean up feedback image
                                 except Exception as e:
                                     print(f"[Controller] Error removing feedback image file {feedback_image_path}: {e}")
                             else:
@@ -384,7 +394,7 @@ class VideoSequenceControllerNode:
                             else:
                                  output_image = starter_image
 
-                        # Increment step *after* processing feedback for the current step
+                        # Increment step *after* processing feedback and saving the frame for the current step
                         current_step += 1
                         state['current_step'] = current_step # Update state for saving
                         print(f"[Controller] Incrementing to step {current_step}/{state['total_segments']}")
@@ -404,14 +414,17 @@ class VideoSequenceControllerNode:
 
             # === Final State Update and Return ===
             state['last_update'] = time.time()
-            state['is_finished'] = (current_step > state['total_segments'])
+            # Finished state is correctly determined *before* saving
+            is_finished = (current_step > state['total_segments'])
+            state['is_finished'] = is_finished
             self._save_state(unique_id, state)
 
-            if state['is_finished']:
-                 print(f"[Controller] Process complete after step {current_step-1}. Final state saved.")
+            if is_finished:
+                 # Log the step number that was just completed
+                 print(f"[Controller] Process complete after finishing step {current_step-1}. Final state saved.")
             else:
-                 # Log the step we are preparing for, using the potentially updated current_step
-                 print(f"[Controller] Preparing for step {current_step}. Outputting image to processing chain.")
+                 # Log the step we are preparing for
+                 print(f"[Controller] Preparing for step {current_step}. Outputting image result from step {current_step-1} to processing chain.")
 
             if output_image is None:
                 print("[Controller] Warning: output_image is None, falling back to starter_image.")
@@ -421,13 +434,16 @@ class VideoSequenceControllerNode:
                  import torch
                  output_image = torch.zeros((1, 64, 64, 3), dtype=torch.float32)
 
-            final_step_number = current_step - 1 if state['is_finished'] else state['current_step'] # Report the step just finished or currently processing
+            # Always return the step number just completed
+            final_step_number = current_step - 1
+            print(f"[Controller] Returning -> Image (Result of Step {final_step_number}), Step Completed: {final_step_number}, Finished: {is_finished}")
+
             return (
                 output_image,
                 state['work_folder_image'],
                 state['work_folder_video'],
-                final_step_number,
-                state['is_finished']
+                final_step_number, # Report the step number just completed
+                is_finished
             )
 
         except Exception as e:
@@ -627,9 +643,279 @@ class VideoSequenceFeedbackNode:
             return (processed_image,) # Fallback
 
 
+# --- Prompt Scheduling Nodes ---
+
+class ScheduledPromptNode:
+    NODE_NAME = "Scheduled Prompt 📝"
+    CATEGORY = "🔄Hagenland/Scheduling"
+    DESCRIPTION = "Holds a prompt text. Connect to a PromptScheduler input slot."
+
+    @classmethod
+    def INPUT_TYPES(cls) -> Dict[str, Any]:
+        return {
+            "required": {
+                "prompt_text": ("STRING", {"multiline": True, "default": ""})
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("prompt_string",)
+    FUNCTION = "get_prompt"
+
+    def get_prompt(self, prompt_text):
+        # Directly return the text
+        output_prompt = prompt_text
+        prompt_preview = prompt_text[:50].replace("\n", " ") + ("..." if len(prompt_text) > 50 else "")
+        print(f"[ScheduledPrompt] Returning: '{prompt_preview}'")
+        return (output_prompt,)
+
+class ValueSchedulerNode:
+    NODE_NAME = "ValueScheduler"
+    CATEGORY = "🔄Hagenland/Scheduling"
+    RETURN_TYPES = ("*",)
+    RETURN_NAMES = ("active_value",)
+    FUNCTION = "schedule_value"
+
+    MAX_SCHEDULED_INPUTS = 16
+
+    @classmethod
+    def INPUT_TYPES(cls) -> Dict[str, Any]:
+        inputs = {
+            "required": {
+                "current_step": ("INT", {"default": 1, "min": 1}),
+            },
+            "optional": {}
+        }
+        for i in range(1, cls.MAX_SCHEDULED_INPUTS + 1):
+            inputs["optional"][f"value_input_{i}"] = ("*", {})
+        return inputs
+
+    def schedule_value(self, current_step, **kwargs):
+        logger.info(f"[{self.NODE_NAME}] Scheduling for step: {current_step}")
+        active_value = None # Default to None
+
+        if current_step >= 0:
+            for i in range(current_step, -1, -1):
+                input_name = f"value_input_{i}"
+                if input_name in kwargs and kwargs[input_name] is not None:
+                    active_value = kwargs[input_name]
+                    logger.info(f"[{self.NODE_NAME}] Final active value for step {current_step}: Type={type(active_value)}")
+                    break # Found the most recent valid input for this step or earlier
+
+        return (active_value,)
+
+
+# --- TYPE-SPECIFIC SCHEDULERS ---
+
+# String Scheduler
+class StringSchedulerNode:
+    NODE_NAME = "StringScheduler"
+    CATEGORY = "🔄Hagenland/Scheduling"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("active_string",)
+    FUNCTION = "schedule_string"
+
+    MAX_SCHEDULED_INPUTS = 16
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        inputs = {
+            "required": {
+                "current_step": ("INT", {"default": 1, "min": 1}),
+            },
+            "optional": {}
+        }
+        for i in range(1, cls.MAX_SCHEDULED_INPUTS + 1):
+            # Accept STRING inputs, default to empty string if not connected
+            inputs["optional"][f"value_input_{i}"] = ("STRING", {"multiline": True, "default": ""})
+        return inputs
+
+    def schedule_string(self, current_step, **kwargs):
+        logger.info(f"[{self.NODE_NAME}] Scheduling for step: {current_step}")
+        active_value = "" # Default to empty string
+        if current_step >= 0:
+            for i in range(current_step, -1, -1):
+                input_name = f"value_input_{i}"
+                # Check if input exists and is not the default empty string (or explicitly provided)
+                if input_name in kwargs and kwargs[input_name] is not None:
+                    # We assume if it's connected, it's intended, even if empty string.
+                    # If you want to treat explicit empty strings as 'not set', add: and kwargs[input_name] != ""
+                    active_value = kwargs[input_name]
+                    logger.info(f"[{self.NODE_NAME}] Found active value '{active_value[:50]}...' at step {i}")
+                    break
+        logger.info(f"[{self.NODE_NAME}] Final active value for step {current_step}: '{active_value[:50]}...'")
+        return (active_value,)
+
+# Integer Scheduler
+class IntSchedulerNode:
+    NODE_NAME = "IntScheduler"
+    CATEGORY = "🔄Hagenland/Scheduling"
+    RETURN_TYPES = ("INT",)
+    RETURN_NAMES = ("active_int",)
+    FUNCTION = "schedule_int"
+
+    MAX_SCHEDULED_INPUTS = 16
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        inputs = {
+            "required": {
+                "current_step": ("INT", {"default": 1, "min": 1}),
+            },
+            "optional": {}
+        }
+        for i in range(1, cls.MAX_SCHEDULED_INPUTS + 1):
+            # Accept INT inputs. Define a range or keep it open.
+            # Using a special large default to differentiate from intended 0 if needed.
+            # Or use a separate boolean 'is_set' if None check is unreliable.
+            # For now, we assume connection means intent.
+            inputs["optional"][f"value_input_{i}"] = ("INT", {"default": 0, "min": -99999999, "max": 99999999})
+        return inputs
+
+    def schedule_int(self, current_step, **kwargs):
+        logger.info(f"[{self.NODE_NAME}] Scheduling for step: {current_step}")
+        active_value = 0 # Default to 0
+        found = False
+        if current_step >= 0:
+            for i in range(current_step, -1, -1):
+                input_name = f"value_input_{i}"
+                if input_name in kwargs and kwargs[input_name] is not None:
+                    # Relying on connection implies value is intended
+                    active_value = kwargs[input_name]
+                    logger.info(f"[{self.NODE_NAME}] Found active value {active_value} at step {i}")
+                    found = True
+                    break
+        if not found:
+             logger.info(f"[{self.NODE_NAME}] No value found up to step {current_step}, returning default {active_value}")
+        else:
+             logger.info(f"[{self.NODE_NAME}] Final active value for step {current_step}: {active_value}")
+        return (active_value,)
+
+# Float Scheduler
+class FloatSchedulerNode:
+    NODE_NAME = "FloatScheduler"
+    CATEGORY = "🔄Hagenland/Scheduling"
+    RETURN_TYPES = ("FLOAT",)
+    RETURN_NAMES = ("active_float",)
+    FUNCTION = "schedule_float"
+
+    MAX_SCHEDULED_INPUTS = 16
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        inputs = {
+            "required": {
+                "current_step": ("INT", {"default": 1, "min": 1}),
+            },
+            "optional": {}
+        }
+        for i in range(1, cls.MAX_SCHEDULED_INPUTS + 1):
+            # Accept FLOAT inputs
+            inputs["optional"][f"value_input_{i}"] = ("FLOAT", {"default": 0.0, "min": -99999999.0, "max": 99999999.0, "step": 0.01})
+        return inputs
+
+    def schedule_float(self, current_step, **kwargs):
+        logger.info(f"[{self.NODE_NAME}] Scheduling for step: {current_step}")
+        active_value = 0.0 # Default to 0.0
+        found = False
+        if current_step >= 0:
+            for i in range(current_step, -1, -1):
+                input_name = f"value_input_{i}"
+                if input_name in kwargs and kwargs[input_name] is not None:
+                    active_value = kwargs[input_name]
+                    logger.info(f"[{self.NODE_NAME}] Found active value {active_value} at step {i}")
+                    found = True
+                    break
+        if not found:
+             logger.info(f"[{self.NODE_NAME}] No value found up to step {current_step}, returning default {active_value}")
+        else:
+             logger.info(f"[{self.NODE_NAME}] Final active value for step {current_step}: {active_value}")
+        return (active_value,)
+
+
+# --- MODEL/CLIP SCHEDULER ---
+
+class ModelClipSchedulerNode:
+    NODE_NAME = "ModelClipScheduler"
+    CATEGORY = "🔄Hagenland/Scheduling"
+    RETURN_TYPES = ("MODEL", "CLIP")
+    RETURN_NAMES = ("active_model", "active_clip")
+    FUNCTION = "schedule_model_clip"
+
+    MAX_SCHEDULED_INPUTS = 16
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        inputs = {
+            "required": {
+                "passthrough_model": ("MODEL",), # Input if nothing scheduled
+                "passthrough_clip": ("CLIP",),   # Input if nothing scheduled
+                "current_step": ("INT", {"default": 1, "min": 1}),
+            },
+            "optional": {}
+        }
+        for i in range(1, cls.MAX_SCHEDULED_INPUTS + 1):
+            inputs["optional"][f"model_input_{i}"] = ("MODEL",)
+            inputs["optional"][f"clip_input_{i}"] = ("CLIP",)
+        return inputs
+
+    def schedule_model_clip(self, passthrough_model, passthrough_clip, current_step, **kwargs):
+        active_model = passthrough_model
+        active_clip = passthrough_clip
+        found_step = -1
+
+        logger.info(f"[{self.NODE_NAME}] Scheduling for step: {current_step}")
+
+        if current_step >= 0:
+            for i in range(current_step, -1, -1):
+                model_input_name = f"model_input_{i}"
+                clip_input_name = f"clip_input_{i}"
+
+                # Check if *both* model and clip inputs exist for this step
+                model_in = kwargs.get(model_input_name)
+                clip_in = kwargs.get(clip_input_name)
+
+                if model_in is not None and clip_in is not None:
+                    active_model = model_in
+                    active_clip = clip_in
+                    found_step = i
+                    logger.info(f"[{self.NODE_NAME}] Found active MODEL/CLIP pair at step {i}")
+                    break # Found the most recent valid pair
+
+        if found_step != -1:
+            logger.info(f"[{self.NODE_NAME}] Outputting scheduled MODEL/CLIP from step {found_step} for current step {current_step}.")
+        else:
+            logger.info(f"[{self.NODE_NAME}] No scheduled MODEL/CLIP found up to step {current_step}. Outputting passthrough MODEL/CLIP.")
+
+        return (active_model, active_clip)
+
+
 # Registration: In your package-level __init__.py, add:
 # NODE_CLASS_MAPPINGS = {
 #     "VideoSequenceController": VideoSequenceControllerNode,
 #     "VideoSequenceFeedback": VideoSequenceFeedbackNode,
-#     "VideoSequenceTrigger": VideoSequenceTriggerNode
+#     "VideoSequenceTrigger": VideoSequenceTriggerNode,
+#     "StepScheduler": StepSchedulerNode,
 # }
+
+NODE_CLASS_MAPPINGS = {
+    "VideoSequenceController": VideoSequenceControllerNode,
+    "VideoSequenceFeedback": VideoSequenceFeedbackNode,
+    "VideoSequenceTrigger": VideoSequenceTriggerNode,
+    "ValueScheduler": ValueSchedulerNode,
+    "StringScheduler": StringSchedulerNode,
+    "IntScheduler": IntSchedulerNode,
+    "FloatScheduler": FloatSchedulerNode,
+    "ModelClipScheduler": ModelClipSchedulerNode,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "VideoSequenceController": "Video Sequence Controller 🎥",
+    "VideoSequenceFeedback": "Video Sequence Feedback 📝",
+    "VideoSequenceTrigger": "Video Sequence Trigger ⚡",
+    "ValueScheduler": "Value Scheduler 📅 (*)",
+    "StringScheduler": "String Scheduler 📅 (Abc)",
+    "IntScheduler": "Int Scheduler 📅 (123)",
+    "FloatScheduler": "Float Scheduler 📅 (1.23)",
+    "ModelClipScheduler": "Model/CLIP Scheduler 📅",
+}

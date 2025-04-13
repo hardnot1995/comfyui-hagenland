@@ -1,24 +1,39 @@
 ﻿# comfyui-hagenland/__init__.py
 
-# Import your node classes from the node subpackage.
-try:
-    from node.video_sequence_controller import VideoSequenceControllerNode, VideoSequenceFeedbackNode, VideoSequenceTriggerNode
-except ImportError:
-    import sys, os
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-    from node.video_sequence_controller import VideoSequenceControllerNode, VideoSequenceFeedbackNode, VideoSequenceTriggerNode
-
+from .node import (
+    VideoSequenceControllerNode,
+    VideoSequenceFeedbackNode,
+    VideoSequenceTriggerNode,
+    ValueSchedulerNode,
+    StringSchedulerNode,
+    IntSchedulerNode,
+    FloatSchedulerNode,
+    ModelClipSchedulerNode,
+    ScheduledPromptNode
+)
 
 # Define NODE_CLASS_MAPPINGS so ComfyUI can find your custom nodes.
 NODE_CLASS_MAPPINGS = {
     "VideoSequenceController": VideoSequenceControllerNode,
     "VideoSequenceFeedback": VideoSequenceFeedbackNode,
-    "VideoSequenceTrigger": VideoSequenceTriggerNode
+    "VideoSequenceTrigger": VideoSequenceTriggerNode,
+    "ScheduledPrompt": ScheduledPromptNode,
+    "ValueScheduler": ValueSchedulerNode,
+    "StringScheduler": StringSchedulerNode,
+    "IntScheduler": IntSchedulerNode,
+    "FloatScheduler": FloatSchedulerNode,
+    "ModelClipScheduler": ModelClipSchedulerNode,
 }
 
 # Optional: Add display names for the web UI
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "VideoSequenceController": "Video Sequence Controller 🔄",
-    "VideoSequenceFeedback": "Video Sequence Feedback 🔄",
-    "VideoSequenceTrigger": "Video Sequence Trigger ➡️"
+    "VideoSequenceController": "Video Sequence Controller 🎥",
+    "VideoSequenceFeedback": "Video Sequence Feedback 📝",
+    "VideoSequenceTrigger": "Video Sequence Trigger ⚡",
+    "ScheduledPrompt": "Scheduled Prompt 📝",
+    "ValueScheduler": "Value Scheduler 📅 (*)",
+    "StringScheduler": "String Scheduler 📅 (Abc)",
+    "IntScheduler": "Int Scheduler 📅 (123)",
+    "FloatScheduler": "Float Scheduler 📅 (1.23)",
+    "ModelClipScheduler": "Model/CLIP Scheduler 📅",
 }
