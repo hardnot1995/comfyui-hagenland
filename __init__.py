@@ -8,7 +8,6 @@ from .node import (
     StringSchedulerNode,
     IntSchedulerNode,
     FloatSchedulerNode,
-    ModelClipSchedulerNode,
     ScheduledPromptNode
 )
 
@@ -22,7 +21,6 @@ NODE_CLASS_MAPPINGS = {
     "StringScheduler": StringSchedulerNode,
     "IntScheduler": IntSchedulerNode,
     "FloatScheduler": FloatSchedulerNode,
-    "ModelClipScheduler": ModelClipSchedulerNode,
 }
 
 # Optional: Add display names for the web UI
@@ -35,5 +33,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "StringScheduler": "String Scheduler 📅 (Abc)",
     "IntScheduler": "Int Scheduler 📅 (123)",
     "FloatScheduler": "Float Scheduler 📅 (1.23)",
-    "ModelClipScheduler": "Model/CLIP Scheduler 📅",
 }

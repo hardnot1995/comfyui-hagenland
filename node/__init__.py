@@ -6,6 +6,5 @@
     StringSchedulerNode,
     IntSchedulerNode,
     FloatSchedulerNode,
-    ModelClipSchedulerNode,
     ScheduledPromptNode
 )
